@@ -1,0 +1,28 @@
+# depslib dependency file v1.0
+1774969927 source:c:\users\byezz\desktop\esilv\3eme année\semestre 2\c_++\projet\projet_tictactoe\projet_ultimate_tic_tac_toe\board.cpp
+	"board.h"
+	<iostream>
+
+1774969907 c:\users\byezz\desktop\esilv\3eme année\semestre 2\c_++\projet\projet_tictactoe\projet_ultimate_tic_tac_toe\board.h
+	<vector>
+	<stack>
+	<cstdint>
+
+1774967709 source:c:\users\byezz\desktop\esilv\3eme année\semestre 2\c_++\projet\projet_tictactoe\projet_ultimate_tic_tac_toe\main.cpp
+	"main.h"
+	"uttt_board.h"
+	<cstdlib>
+	<ctime>
+
+1774967653 c:\users\byezz\desktop\esilv\3eme année\semestre 2\c_++\projet\projet_tictactoe\projet_ultimate_tic_tac_toe\main.h
+	<string>
+
+1774967687 c:\users\byezz\desktop\esilv\3eme année\semestre 2\c_++\projet\projet_tictactoe\projet_ultimate_tic_tac_toe\uttt_board.h
+	<vector>
+	<stack>
+	<cstdint>
+
+1774967687 source:c:\users\byezz\desktop\esilv\3eme année\semestre 2\c_++\projet\projet_tictactoe\projet_ultimate_tic_tac_toe\uttt_board.cpp
+	"uttt_board.h"
+	<iostream>
+

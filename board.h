@@ -67,4 +67,9 @@ public:
     GameState get_game_state() const;  // Returns the current game state
 
     void display_board() const; // Utility function to print the board state for debugging
+
+    // Accessors for graphical rendering
+    Player get_cell(uint8_t move) const;            // Returns who occupies a cell (NONE/X/O)
+    uint8_t get_active_macro_board() const;          // Returns the active sub-board (ANY_BOARD if free)
+    Player get_sub_board_winner(uint8_t sub) const;  // Returns who won a sub-board (NONE if not won)
 };

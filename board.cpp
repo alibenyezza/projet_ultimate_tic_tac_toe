@@ -342,3 +342,25 @@ void Board::display_board() const
     }
     std::cout << std::endl;
 }
+
+// ============================================================================
+// Accessors for graphical rendering
+// ============================================================================
+Player Board::get_cell(uint8_t move) const
+{
+    if (!get_bit(board, move))
+        return Player::NONE;
+    return get_bit(board_mask, move) ? Player::O : Player::X;
+}
+
+uint8_t Board::get_active_macro_board() const
+{
+    return active_macro_board;
+}
+
+Player Board::get_sub_board_winner(uint8_t sub) const
+{
+    if (!((macro_board >> sub) & 1))
+        return Player::NONE;
+    return ((macro_board_mask >> sub) & 1) ? Player::O : Player::X;
+}
