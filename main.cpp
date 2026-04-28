@@ -1,5 +1,6 @@
 // Fichier généré par de l'IA
-#include "board.h"
+#include "uttt_board.h"
+#include "board_display.h"
 #include <iostream>
 #include <string>
 #include <limits>
@@ -21,16 +22,16 @@ static void print_help()
 
 int main()
 {
-    Board board;
+    uttt::Board board;
     print_help();
 
     while (!board.is_game_over())
     {
-        board.display_board();
+        uttt::display_board(board);
         std::cout << std::endl;
 
-        Player p = board.get_current_player();
-        std::cout << "Player " << (p == Player::X ? "X" : "O") << "'s turn. Enter move (sub cell): ";
+        uttt::Player p = board.get_current_player();
+        std::cout << "Player " << (p == uttt::Player::X ? "X" : "O") << "'s turn. Enter move (sub cell): ";
 
         std::string input;
         if (!std::getline(std::cin, input))
@@ -84,17 +85,17 @@ int main()
 
     // Final board
     std::cout << "\n";
-    board.display_board();
+    uttt::display_board(board);
 
     switch (board.get_game_state())
     {
-    case GameState::X_WINS:
+    case uttt::GameState::X_WINS:
         std::cout << "\n*** Player X wins! ***\n";
         break;
-    case GameState::O_WINS:
+    case uttt::GameState::O_WINS:
         std::cout << "\n*** Player O wins! ***\n";
         break;
-    case GameState::DRAW:
+    case uttt::GameState::DRAW:
         std::cout << "\n*** It's a draw! ***\n";
         break;
     default:
