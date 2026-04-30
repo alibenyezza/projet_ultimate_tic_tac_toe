@@ -1,11 +1,25 @@
 #pragma once
 #include <vector>
-#include <stack>
 #include <cstdint>
 
 namespace uttt
 {
 
+    // ============================================================================
+    // Precomputed 512-entry win lookup table (9-bit index → bool)
+    // ============================================================================
+    extern const uint8_t *WIN_LUT;
+
+    // ============================================================================
+    // Zobrist hashing tables (initialized once at program start)
+    // ============================================================================
+    extern uint64_t ZOBRIST_CELL[81][2]; // [position][0=X, 1=O]
+    extern uint64_t ZOBRIST_SIDE;        // XOR'd when side-to-move changes
+    void init_zobrist();                 // Call once at startup
+
+    // ============================================================================
+    // Enums
+    // ============================================================================
     enum Player : uint8_t
     {
         NONE = 0,
@@ -21,65 +35,124 @@ namespace uttt
         DRAW = 3
     };
 
+    // ============================================================================
+    // Forward declarations
+    // ============================================================================
+    class MCTSSolver;
+
+    // ============================================================================
+    // Bitboard helpers (used by Board and MCTS)
+    // ============================================================================
+    static inline bool get_bit(const uint64_t b[2], uint8_t pos)
+    {
+        return (b[pos / 64] >> (pos % 64)) & 1;
+    }
+
+    static inline void set_bit(uint64_t b[2], uint8_t pos)
+    {
+        b[pos / 64] |= (1ULL << (pos % 64));
+    }
+
+    static inline void clear_bit(uint64_t b[2], uint8_t pos)
+    {
+        b[pos / 64] &= ~(1ULL << (pos % 64));
+    }
+
+    static inline uint16_t extract_sub_board(const uint64_t b[2], uint8_t sub)
+    {
+        uint8_t start = sub * 9;
+        if (start + 9 <= 64)
+        {
+            return static_cast<uint16_t>((b[0] >> start) & 0x1FF);
+        }
+        else if (start >= 64)
+        {
+            return static_cast<uint16_t>((b[1] >> (start - 64)) & 0x1FF);
+        }
+        else
+        {
+            uint8_t bits_in_lo = 64 - start;
+            uint16_t lo = static_cast<uint16_t>(b[0] >> start);
+            uint16_t hi = static_cast<uint16_t>(b[1] << bits_in_lo);
+            return (lo | hi) & 0x1FF;
+        }
+    }
+
     /// @brief Represents an Ultimate Tic-Tac-Toe board.
     /// @details Manages 9 sub-boards, move constraints, and win detection
     ///          using a compact 128-bit bitboard representation.
     class Board
     {
+        friend class MCTSSolver;
+
     public:
-        static constexpr uint8_t ANY_BOARD = 0xFF; // Sentinel value: any sub-board is playable
+        static constexpr uint8_t ANY_BOARD = 0xFF;
+        static constexpr uint8_t MAX_MOVES = 81;
 
     private:
-        /// @brief Stores the state needed to undo a move.
         struct MoveRecord
         {
-            uint8_t move;                  // The move that was made (0-80)
-            uint8_t prev_active_sub_board; // Active sub-board before the move
-            GameState prev_game_state;     // Game state before the move
-            bool sub_board_won;            // Whether the move caused a sub-board win
+            uint8_t move;
+            uint8_t prev_active_sub_board;
+            GameState prev_game_state;
+            uint16_t prev_decided;
+            bool sub_board_won;
         };
 
-        uint64_t cell_bits_[2];  // Occupancy bitboard: bit set = cell occupied; [0] bits 0-63, [1] bits 64-80
-        uint64_t owner_bits_[2]; // Owner bitboard: bit set = player O; [0] bits 0-63, [1] bits 64-80
+        uint64_t cell_bits_[2];
+        uint64_t owner_bits_[2];
 
-        uint8_t active_sub_board_; // ANY_BOARD if free choice, otherwise index (0-8) of the required sub-board
+        uint8_t active_sub_board_;
 
-        uint16_t sub_board_wins_;      // Bit set = sub-board won by someone (not set for draws)
-        uint16_t sub_board_win_owner_; // Bit set = sub-board won by O (only meaningful when corresponding bit in sub_board_wins_ is set)
+        uint16_t sub_board_wins_;
+        uint16_t sub_board_win_owner_;
+        uint16_t decided_boards_; // Bit set = sub-board is decided (won or full)
 
-        std::stack<MoveRecord> move_history_;
+        MoveRecord history_[MAX_MOVES];
+        uint8_t history_size_;
+        uint8_t move_count_; // Total moves played so far
 
         Player current_player_;
         GameState game_state_;
+        uint64_t zobrist_hash_;
 
-        GameState update_state();                     // Updates and returns the game state based on current board
-        bool is_sub_board_decided(uint8_t sub) const; // Checks if a sub-board is won or completely filled
+        GameState update_state();
 
     public:
         Board();
-        void reset(); // Resets the board to the initial state
+        void reset();
 
-        bool make_move(uint8_t move); // Returns true if the move was successful, false if invalid
-        void undo_move();             // Undoes the last move
+        bool make_move(uint8_t move);
+        void undo_move();
 
-        std::vector<uint8_t> get_valid_moves() const; // Returns valid moves for the current position
-        bool is_valid_move(uint8_t move) const;       // Checks if a specific move is valid
+        std::vector<uint8_t> get_valid_moves() const;
+        bool is_valid_move(uint8_t move) const;
 
-        bool is_game_over() const; // Checks if the game has ended
+        bool is_game_over() const;
 
-        Player get_current_player() const; // Returns the current player (X or O)
-        GameState get_game_state() const;  // Returns the current game state
+        Player get_current_player() const;
+        GameState get_game_state() const;
 
-        /// @brief Returns which player occupies a cell, or NONE if empty.
-        /// @param position Cell index (0-80).
         inline Player get_cell(uint8_t position) const;
-
-        /// @brief Returns the active sub-board index, or ANY_BOARD if free choice.
         inline uint8_t get_active_sub_board() const;
+        inline uint64_t hash() const;
+        inline uint8_t get_move_count() const;
+
+        /// @brief Returns a 9-bit mask of empty cells for a given sub-board.
+        inline uint16_t get_empty_mask(uint8_t sub) const;
+
+        /// @brief Returns the 9-bit decided-boards mask (lower 9 bits).
+        inline uint16_t get_decided_boards() const;
+
+        /// @brief Returns sub_board_wins_ (lower 9 bits, bit set = won by someone).
+        inline uint16_t get_sub_board_wins() const;
+
+        /// @brief Returns sub_board_win_owner_ (bit set = won by O).
+        inline uint16_t get_sub_board_win_owner() const;
     };
 
     // ============================================================================
-    // Inline accessors (defined in header for zero call overhead)
+    // Inline accessors
     // ============================================================================
     inline Player Board::get_cell(uint8_t position) const
     {
@@ -94,6 +167,36 @@ namespace uttt
     inline uint8_t Board::get_active_sub_board() const
     {
         return active_sub_board_;
+    }
+
+    inline uint64_t Board::hash() const
+    {
+        return zobrist_hash_;
+    }
+
+    inline uint8_t Board::get_move_count() const
+    {
+        return move_count_;
+    }
+
+    inline uint16_t Board::get_empty_mask(uint8_t sub) const
+    {
+        return (~extract_sub_board(cell_bits_, sub)) & 0x1FF;
+    }
+
+    inline uint16_t Board::get_decided_boards() const
+    {
+        return decided_boards_;
+    }
+
+    inline uint16_t Board::get_sub_board_wins() const
+    {
+        return sub_board_wins_;
+    }
+
+    inline uint16_t Board::get_sub_board_win_owner() const
+    {
+        return sub_board_win_owner_;
     }
 
 } // namespace uttt

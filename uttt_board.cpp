@@ -1,80 +1,68 @@
 #include "uttt_board.h"
-#include <iostream>
+#include <random>
 
 namespace uttt
 {
 
     // ============================================================================
     // Win patterns for a 3x3 board (9-bit masks)
-    // Cell layout:  0 | 1 | 2
-    //               3 | 4 | 5
-    //               6 | 7 | 8
     // ============================================================================
     static constexpr uint16_t WIN_PATTERNS[8] = {
-        0x007, // Row 0: 0b000'000'111
-        0x038, // Row 1: 0b000'111'000
-        0x1C0, // Row 2: 0b111'000'000
-        0x049, // Col 0: 0b001'001'001
-        0x092, // Col 1: 0b010'010'010
-        0x124, // Col 2: 0b100'100'100
-        0x111, // Diag:  0b100'010'001
-        0x054  // Anti:  0b001'010'100
-    };
+        0x007, 0x038, 0x1C0, 0x049, 0x092, 0x124, 0x111, 0x054};
 
     // ============================================================================
-    // Bitboard helpers
-    // Bit layout: move index = sub_board * 9 + cell (0-80)
-    //   cell_bits_[0] holds bits 0-63, cell_bits_[1] holds bits 64-80
+    // Precomputed 512-entry O(1) win lookup table
+    // WIN_LUT[mask] = 1 if the 9-bit mask contains any winning 3-in-a-row
+    // Initialized once at startup via ensure_win_lut().
     // ============================================================================
-    static inline bool get_bit(const uint64_t b[2], uint8_t pos)
-    {
-        return (b[pos / 64] >> (pos % 64)) & 1;
-    }
+    static uint8_t s_win_lut[512];
+    static bool s_win_lut_ready = false;
 
-    static inline void set_bit(uint64_t b[2], uint8_t pos)
+    static void ensure_win_lut()
     {
-        b[pos / 64] |= (1ULL << (pos % 64));
-    }
-
-    static inline void clear_bit(uint64_t b[2], uint8_t pos)
-    {
-        b[pos / 64] &= ~(1ULL << (pos % 64));
-    }
-
-    /// @brief Extracts 9 bits for a sub-board from the 128-bit bitboard.
-    /// @param b The bitboard array (2 x uint64_t).
-    /// @param sub The sub-board index (0-8).
-    /// @return A 9-bit mask of the sub-board's cells.
-    static inline uint16_t extract_sub_board(const uint64_t b[2], uint8_t sub)
-    {
-        uint8_t start = sub * 9;
-        if (start + 9 <= 64)
+        if (s_win_lut_ready)
+            return;
+        for (int i = 0; i < 512; i++)
         {
-            return static_cast<uint16_t>((b[0] >> start) & 0x1FF);
+            s_win_lut[i] = 0;
+            for (int p = 0; p < 8; p++)
+            {
+                if ((static_cast<uint16_t>(i) & WIN_PATTERNS[p]) == WIN_PATTERNS[p])
+                {
+                    s_win_lut[i] = 1;
+                    break;
+                }
+            }
         }
-        else if (start >= 64)
-        {
-            return static_cast<uint16_t>((b[1] >> (start - 64)) & 0x1FF);
-        }
-        else
-        {
-            // Spans both uint64_t's (sub-board 7: bits 63-71)
-            uint8_t bits_in_lo = 64 - start;
-            uint16_t lo = static_cast<uint16_t>(b[0] >> start);
-            uint16_t hi = static_cast<uint16_t>(b[1] << bits_in_lo);
-            return (lo | hi) & 0x1FF;
-        }
+        s_win_lut_ready = true;
     }
 
-    /// @brief Checks if a 9-bit cell mask contains a winning 3-in-a-row pattern.
+    // Public symbol referenced from the header
+    const uint8_t *WIN_LUT = s_win_lut;
+
+    // ============================================================================
+    // Zobrist hashing tables
+    // ============================================================================
+    uint64_t ZOBRIST_CELL[81][2] = {};
+    uint64_t ZOBRIST_SIDE = 0;
+
+    void init_zobrist()
+    {
+        std::mt19937_64 rng(0xDEADBEEF42ULL); // Fixed seed for reproducibility
+        for (int i = 0; i < 81; i++)
+        {
+            ZOBRIST_CELL[i][0] = rng();
+            ZOBRIST_CELL[i][1] = rng();
+        }
+        ZOBRIST_SIDE = rng();
+    }
+
+    // ============================================================================
+    // O(1) win check using the lookup table
+    // ============================================================================
     static inline bool check_win(uint16_t cells)
     {
-        for (int i = 0; i < 8; i++)
-        {
-            if ((cells & WIN_PATTERNS[i]) == WIN_PATTERNS[i])
-                return true;
-        }
-        return false;
+        return s_win_lut[cells] != 0;
     }
 
     // ============================================================================
@@ -82,6 +70,7 @@ namespace uttt
     // ============================================================================
     Board::Board()
     {
+        ensure_win_lut();
         reset();
     }
 
@@ -94,27 +83,19 @@ namespace uttt
         active_sub_board_ = ANY_BOARD;
         sub_board_wins_ = 0;
         sub_board_win_owner_ = 0;
+        decided_boards_ = 0;
+        history_size_ = 0;
+        move_count_ = 0;
         current_player_ = Player::X;
         game_state_ = GameState::ONGOING;
-        while (!move_history_.empty())
-            move_history_.pop();
+        zobrist_hash_ = 0;
     }
 
     // ============================================================================
     // Private helpers
     // ============================================================================
-    bool Board::is_sub_board_decided(uint8_t sub) const
-    {
-        // Won by someone
-        if ((sub_board_wins_ >> sub) & 1)
-            return true;
-        // All 9 cells filled (drawn sub-board)
-        return (extract_sub_board(cell_bits_, sub) & 0x1FF) == 0x1FF;
-    }
-
     GameState Board::update_state()
     {
-        // Extract each player's won sub-boards (lower 9 bits)
         uint16_t x_macro = sub_board_wins_ & ~sub_board_win_owner_ & 0x1FF;
         uint16_t o_macro = sub_board_wins_ & sub_board_win_owner_ & 0x1FF;
 
@@ -129,17 +110,8 @@ namespace uttt
             return game_state_;
         }
 
-        // Check for draw: all 9 sub-boards decided (won or full)
-        bool all_decided = true;
-        for (uint8_t s = 0; s < 9; s++)
-        {
-            if (!is_sub_board_decided(s))
-            {
-                all_decided = false;
-                break;
-            }
-        }
-        if (all_decided)
+        // Draw: all 9 sub-boards decided
+        if ((decided_boards_ & 0x1FF) == 0x1FF)
         {
             game_state_ = GameState::DRAW;
             return game_state_;
@@ -161,15 +133,12 @@ namespace uttt
 
         uint8_t sub = move / 9;
 
-        // Cell must be empty
         if (get_bit(cell_bits_, move))
             return false;
 
-        // Sub-board must not be decided (won or full)
-        if (is_sub_board_decided(sub))
+        if ((decided_boards_ >> sub) & 1)
             return false;
 
-        // Must play in the active sub-board if constrained
         if (active_sub_board_ != ANY_BOARD && sub != active_sub_board_)
             return false;
 
@@ -184,28 +153,29 @@ namespace uttt
 
         if (active_sub_board_ != ANY_BOARD)
         {
-            // Forced to play in a specific sub-board
             uint8_t base = active_sub_board_ * 9;
-            uint16_t occupied = extract_sub_board(cell_bits_, active_sub_board_);
-            for (uint8_t c = 0; c < 9; c++)
+            uint16_t empty = get_empty_mask(active_sub_board_);
+            while (empty)
             {
-                if (!((occupied >> c) & 1))
-                    moves.push_back(base + c);
+                int c = __builtin_ctz(empty);
+                moves.push_back(base + c);
+                empty &= empty - 1;
             }
         }
         else
         {
-            // Free choice: any empty cell in any undecided sub-board
-            for (uint8_t s = 0; s < 9; s++)
+            uint16_t open = (~decided_boards_) & 0x1FF;
+            while (open)
             {
-                if (is_sub_board_decided(s))
-                    continue;
+                int s = __builtin_ctz(open);
+                open &= open - 1;
                 uint8_t base = s * 9;
-                uint16_t occupied = extract_sub_board(cell_bits_, s);
-                for (uint8_t c = 0; c < 9; c++)
+                uint16_t empty = get_empty_mask(s);
+                while (empty)
                 {
-                    if (!((occupied >> c) & 1))
-                        moves.push_back(base + c);
+                    int c = __builtin_ctz(empty);
+                    moves.push_back(base + c);
+                    empty &= empty - 1;
                 }
             }
         }
@@ -224,23 +194,26 @@ namespace uttt
         uint8_t cell = move % 9;
 
         // Save state for undo
-        MoveRecord record;
+        MoveRecord &record = history_[history_size_];
         record.move = move;
         record.prev_active_sub_board = active_sub_board_;
         record.prev_game_state = game_state_;
+        record.prev_decided = decided_boards_;
         record.sub_board_won = false;
 
-        // Place the piece
+        // Place the piece + update Zobrist hash
         set_bit(cell_bits_, move);
+        uint8_t player_idx = (current_player_ == Player::X) ? 0 : 1;
         if (current_player_ == Player::O)
             set_bit(owner_bits_, move);
+        zobrist_hash_ ^= ZOBRIST_CELL[move][player_idx];
 
-        // Check if this move wins the sub-board for the current player
+        // Check if this move wins the sub-board (O(1) lookup)
         uint16_t occupied = extract_sub_board(cell_bits_, sub);
-        uint16_t mask = extract_sub_board(owner_bits_, sub);
+        uint16_t omask = extract_sub_board(owner_bits_, sub);
         uint16_t player_cells = (current_player_ == Player::X)
-                                    ? (occupied & ~mask & 0x1FF)
-                                    : (occupied & mask);
+                                    ? (occupied & ~omask & 0x1FF)
+                                    : (occupied & omask);
 
         if (check_win(player_cells))
         {
@@ -248,22 +221,28 @@ namespace uttt
             if (current_player_ == Player::O)
                 sub_board_win_owner_ |= (1 << sub);
             record.sub_board_won = true;
+            decided_boards_ |= (1 << sub);
+        }
+        else if ((occupied & 0x1FF) == 0x1FF)
+        {
+            // Sub-board is full but no winner = drawn sub-board
+            decided_boards_ |= (1 << sub);
         }
 
-        move_history_.push(record);
+        history_size_++;
+        move_count_++;
 
-        // Determine next active sub-board:
-        // The cell index within the sub-board dictates which sub-board the opponent must play in.
-        // If that target sub-board is decided, the opponent gets free choice.
-        if (is_sub_board_decided(cell))
+        // Determine next active sub-board
+        if ((decided_boards_ >> cell) & 1)
             active_sub_board_ = ANY_BOARD;
         else
             active_sub_board_ = cell;
 
-        // Update game state (win / draw / ongoing)
+        // Update game state
         update_state();
 
-        // Switch player
+        // Switch player + toggle side hash
+        zobrist_hash_ ^= ZOBRIST_SIDE;
         current_player_ = (current_player_ == Player::X) ? Player::O : Player::X;
 
         return true;
@@ -271,20 +250,26 @@ namespace uttt
 
     void Board::undo_move()
     {
-        if (move_history_.empty())
+        if (history_size_ == 0)
             return;
 
-        MoveRecord record = move_history_.top();
-        move_history_.pop();
+        history_size_--;
+        move_count_--;
+        const MoveRecord &record = history_[history_size_];
 
-        // Switch player back (undo the switch that happened in make_move)
+        // Switch player back + toggle side hash
         current_player_ = (current_player_ == Player::X) ? Player::O : Player::X;
+        zobrist_hash_ ^= ZOBRIST_SIDE;
 
-        // Clear the piece from both bitboards
+        // Undo Zobrist for the piece
+        uint8_t player_idx = (current_player_ == Player::X) ? 0 : 1;
+        zobrist_hash_ ^= ZOBRIST_CELL[record.move][player_idx];
+
+        // Clear the piece
         clear_bit(cell_bits_, record.move);
         clear_bit(owner_bits_, record.move);
 
-        // Undo sub-board win if this move caused one
+        // Undo sub-board win
         if (record.sub_board_won)
         {
             uint8_t sub = record.move / 9;
@@ -295,6 +280,7 @@ namespace uttt
         // Restore saved state
         active_sub_board_ = record.prev_active_sub_board;
         game_state_ = record.prev_game_state;
+        decided_boards_ = record.prev_decided;
     }
 
     // ============================================================================
