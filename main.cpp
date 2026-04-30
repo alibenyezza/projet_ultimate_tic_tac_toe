@@ -78,6 +78,15 @@ int main()
     }
 
     uttt::MCTSSolver solver;
+
+    if (x_is_ai || o_is_ai)
+    {
+        std::cout << "Deterministic mode? (y/n) [n]: ";
+        std::string line;
+        if (std::getline(std::cin, line) && (line == "y" || line == "Y"))
+            solver.set_deterministic(true);
+    }
+
     print_help();
 
     while (!board.is_game_over())

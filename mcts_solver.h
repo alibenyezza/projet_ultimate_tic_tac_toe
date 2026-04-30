@@ -86,7 +86,12 @@ namespace uttt
         /// @brief Returns the number of iterations completed in the last search.
         uint32_t last_iterations() const { return last_iterations_; }
 
+        /// @brief Toggle deterministic mode (same position always gives same move).
+        void set_deterministic(bool d) { deterministic_ = d; }
+
     private:
+        bool deterministic_ = false;
+
         // ---- Memory pool (static to avoid stack overflow) ----
         static Node pool_[MAX_NODES];
         uint32_t pool_next_;
