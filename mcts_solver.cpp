@@ -199,7 +199,10 @@ namespace uttt
         auto start_time = Clock::now();
 
         // Seed the PRNG
-        s_rng_state = board.hash() ^ 0xCAFEBABE12345ULL;
+        if (deterministic_)
+            s_rng_state = board.hash() ^ 0xCAFEBABE12345ULL;
+        else
+            s_rng_state = board.hash() ^ static_cast<uint64_t>(start_time.time_since_epoch().count());
 
         reset_pool();
         std::memset(amaf_, 0, sizeof(amaf_));
